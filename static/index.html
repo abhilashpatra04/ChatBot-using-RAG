@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAG Chatbot with Google Workspace</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial; margin: 24px; }
+    .row { display: flex; gap: 16px; }
+    .col { flex: 1; min-width: 280px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
+    .section { margin-bottom: 12px; }
+    .group { border: 1px solid #eee; border-radius: 8px; padding: 8px; margin: 8px 0; }
+    .group h4 { margin: 0 0 8px 0; font-size: 14px; }
+    .chat { height: 360px; overflow: auto; border: 1px solid #ddd; padding: 8px; border-radius: 8px; }
+    .msg { margin: 8px 0; }
+    .msg.you { text-align: right; }
+    .hint { color: #666; font-size: 12px; }
+    button { cursor: pointer; }
+    .msg pre { background: #f6f8fa; padding: 8px; border-radius: 6px; overflow: auto; }
+    .msg code { background: #f6f8fa; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h2>RAG Chatbot (FastAPI UI)</h2>
+  <div class="row">
+    <div class="col">
+      <div class="card">
+        <h3>1) Sign in</h3>
+        <button id="login">Sign in with Google</button>
+        <p id="me" class="hint">After authenticating, return here.</p>
+      </div>
+      <div class="card">
+        <h3>2) Select Google Files</h3>
+        <div class="section">
+          <button id="loadFiles">Load My Files</button>
+          <span id="loadInfo" class="hint"></span>
+        </div>
+        <div id="groups">
+          <div class="group" id="group-docs"><h4>Google Docs</h4><div class="items"></div></div>
+          <div class="group" id="group-sheets"><h4>Google Sheets</h4><div class="items"></div></div>
+          <div class="group" id="group-slides"><h4>Google Slides</h4><div class="items"></div></div>
+          <div class="group" id="group-drive"><h4>Google Drive (PDFs)</h4><div class="items"></div></div>
+        </div>
+        <div class="section">
+          <button id="ingest">Add to Knowledge Base</button>
+          <p id="ingestStatus" class="hint"></p>
+        </div>
+        <div class="section">
+          <button id="resetKB" style="background:#fee; border:1px solid #f99;">Reset KB</button>
+          <span id="resetInfo" class="hint"></span>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card">
+        <h3>3) Chat</h3>
+        <div class="section">
+          <label>Model: 
+            <select id="modelSelect">
+              <option value="gemini">Gemini (Google)</option>
+              <option value="groq-openai">Groq - openai/gpt-oss-20b</option>
+              <option value="groq-qwen">Groq - qwen/qwen3-32b</option>
+            </select>
+          </label>
+        </div>
+        <div id="chat" class="chat"></div>
+        <div class="row">
+          <input id="q" style="flex:1" placeholder="Ask a question... try 'summarize' to summarize all selected" />
+          <button id="ask">Ask</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Markdown renderer and sanitization -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script>
+    const api = (path, opts={}) => fetch(path, {credentials:'include', ...opts}).then(r => r.json());
+
+    const groups = {
+      docs: document.querySelector('#group-docs .items'),
+      sheets: document.querySelector('#group-sheets .items'),
+      slides: document.querySelector('#group-slides .items'),
+      drive: document.querySelector('#group-drive .items'),
+    };
+
+    function renderFiles(files) {
+      Object.values(groups).forEach(g => g.innerHTML = '');
+      const byType = { docs: [], sheets: [], slides: [], drive: [] };
+      (files || []).forEach(f => { if (byType[f.type]) byType[f.type].push(f); });
+      Object.entries(byType).forEach(([type, arr]) => {
+        const holder = groups[type];
+        if (!holder) return;
+        if (!arr.length) { holder.innerHTML = '<span class="hint">No files.</span>'; return; }
+        arr.forEach(f => {
+          const id = `${type}-${f.id}`;
+          const el = document.createElement('div');
+          const when = f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString() : '';
+          el.innerHTML = `<label><input type="checkbox" data-type="${type}" value="${f.id}" id="${id}"> ${f.name} <span class=\"hint\">${when}</span> <a href=\"${f.webViewLink || '#'}\" target=\"_blank\" rel=\"noopener\">🔗</a></label>`;
+          holder.appendChild(el);
+        });
+      });
+    }
+
+    document.getElementById('login').onclick = async () => {
+      const data = await api('/auth/login');
+      if (data.auth_url) window.location.href = data.auth_url; else alert('Set Google OAuth env vars.');
+    };
+
+    document.getElementById('loadFiles').onclick = async () => {
+      document.getElementById('loadInfo').textContent = 'Loading...';
+      const data = await api('/docs/list');
+      renderFiles(Array.isArray(data) ? data : []);
+      const n = Array.isArray(data) ? data.length : 0;
+      document.getElementById('loadInfo').textContent = n ? `Loaded ${n} files` : 'No files or not authenticated.';
+    };
+
+    document.getElementById('ingest').onclick = async () => {
+      const boxes = document.querySelectorAll('#groups input[type="checkbox"]:checked');
+      const items = Array.from(boxes).map(b => ({ id: b.value, type: b.getAttribute('data-type') }));
+      if (!items.length) { alert('Select at least one file.'); return; }
+      const res = await api('/docs/ingest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) });
+      document.getElementById('ingestStatus').textContent = res.status || JSON.stringify(res);
+    };
+
+    document.getElementById('resetKB').onclick = async () => {
+      document.getElementById('resetInfo').textContent = 'Resetting...';
+      const res = await api('/admin/reset', { method: 'POST' });
+      document.getElementById('resetInfo').textContent = res.status || JSON.stringify(res);
+    };
+
+    function addMsg(text, who) {
+      const el = document.createElement('div');
+      el.className = `msg ${who}`;
+      if (who === 'bot') {
+        try { el.innerHTML = DOMPurify.sanitize(marked.parse(String(text||''))); }
+        catch(e){ el.textContent = text; }
+      } else {
+        el.textContent = text;
+      }
+      document.getElementById('chat').appendChild(el);
+      document.getElementById('chat').scrollTop = 1e9;
+    }
+
+    // Load chat history on page load
+    async function loadChatHistory() {
+      try {
+        const data = await api('/chat/history');
+        const chat = document.getElementById('chat');
+        chat.innerHTML = '';
+        (data.history || []).forEach(msg => {
+          addMsg(msg.content, msg.role === 'user' ? 'you' : 'bot');
+        });
+      } catch (e) {
+        console.log('No chat history available');
+      }
+    }
+
+    // Load history when page loads
+    loadChatHistory();
+
+    document.getElementById('ask').onclick = async () => {
+      const q = document.getElementById('q').value.trim();
+      if (!q) return;
+      addMsg(q, 'you');
+      document.getElementById('q').value = '';
+      const model = document.getElementById('modelSelect').value;
+      const res = await api('/chat/ask', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ question: q, model: model }) });
+      addMsg(res.answer || JSON.stringify(res), 'bot');
+    };
+  </script>
+</body>
+</html>
