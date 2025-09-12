@@ -115,7 +115,6 @@ Codemate Assignment/
 │   └── index.html              # FastAPI web interface
 ├── streamlit_app.py            # Streamlit application
 ├── requirements.txt            # Python dependencies
-├── ENV_TEMPLATE.txt           # Environment variables template
 └── README.md                  # This documentation
 ```
 
