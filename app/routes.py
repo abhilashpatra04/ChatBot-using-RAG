@@ -7,13 +7,16 @@ from .config import settings
 import os
 import json
 from typing import List
+import requests
+import urllib.parse
+import re
 
 api = APIRouter()
 
-# In-memory vector store for demo scope. In production use a DB-backed store.
+
 VECTOR_STORE = VectorStore()
 
-# In-memory chat history (persists until server restart)
+
 CHAT_HISTORY = []
 
 api.include_router(auth_router)
@@ -45,12 +48,12 @@ def add_to_chat_history(payload: dict):
 def debug_vector_store():
     """Debug endpoint to see what's in the vector store"""
     try:
-        # Get all documents from the collection
+
         results = VECTOR_STORE.collection.get()
         docs = results.get("documents", [])
         metadatas = results.get("metadatas", [])
         
-        # Group by doc_type
+
         by_type = {}
         for doc, meta in zip(docs, metadatas):
             doc_type = meta.get("doc_type", "unknown")
@@ -77,7 +80,7 @@ def ingest_docs(request: Request, payload: dict):
     if not creds:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     items: List[dict] = payload.get("items") or []
-    # backward compat: allow {doc_ids: []} for docs only
+
     doc_ids = payload.get("doc_ids", [])
     added = 0
     if items:
@@ -99,7 +102,6 @@ def ingest_docs(request: Request, payload: dict):
             else:
                 text = ""
             
-            # Debug logging
             print(f"Processing {file_type} file {file_id} ({title}): extracted {len(text)} chars")
             
             chunks = split_into_chunks(text)
@@ -164,23 +166,246 @@ def _add_to_history_and_return(answer: str, source: str = "general", sources: li
     return {"answer": answer, "source": source, "sources": sources or []}
 
 
+def _duckduckgo_search(query: str, max_results: int = 5) -> List[dict]:
+    """Lightweight search via DuckDuckGo endpoints (no API key). Returns list of {title, url}."""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    q = urllib.parse.quote_plus(query)
+    endpoints = [
+        f"https://duckduckgo.com/html/?q={q}",
+        f"https://duckduckgo.com/lite/?q={q}",
+    ]
+    links: List[dict] = []
+    for url in endpoints:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            html = resp.text or ""
+            # Broadly capture anchors with http(s) hrefs and non-empty titles
+            for m in re.finditer(r'<a[^>]+href=\"(https?[^\"]+)\"[^>]*>(.*?)<', html, re.IGNORECASE):
+                href = m.group(1)
+                netloc = urllib.parse.urlparse(href).netloc
+                if not netloc or "duckduckgo.com" in netloc:
+                    continue
+                title = re.sub(r"<[^>]+>", "", m.group(2))
+                title = re.sub(r"\s+", " ", title).strip()
+                if not title:
+                    continue
+                links.append({"title": title, "url": href})
+                if len(links) >= max_results:
+                    return links
+        except Exception:
+            continue
+    return links
+
+
+def _bing_search(query: str, max_results: int = 5) -> List[dict]:
+    """Fallback search via Bing HTML (no API key). Returns list of {title, url}."""
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+    q = urllib.parse.quote_plus(query)
+    url = f"https://www.bing.com/search?q={q}&setlang=en"
+    links: List[dict] = []
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        html = resp.text or ""
+        # Prefer standard result blocks
+        for m in re.finditer(r'<li class=\"b_algo\"[\s\S]*?<h2>\s*<a[^>]+href=\"(https?[^\"]+)\"[^>]*>([\s\S]*?)<', html, re.IGNORECASE):
+            href = m.group(1)
+            title = re.sub(r"<[^>]+>", "", m.group(2))
+            title = re.sub(r"\s+", " ", title).strip()
+            if not title:
+                continue
+            links.append({"title": title, "url": href})
+            if len(links) >= max_results:
+                return links
+        # Fallback: any anchor inside <h2>
+        for m in re.finditer(r'<h2>\s*<a[^>]+href=\"(https?[^\"]+)\"[^>]*>([\s\S]*?)<', html, re.IGNORECASE):
+            href = m.group(1)
+            title = re.sub(r"<[^>]+>", "", m.group(2))
+            title = re.sub(r"\s+", " ", title).strip()
+            if not title:
+                continue
+            links.append({"title": title, "url": href})
+            if len(links) >= max_results:
+                return links
+    except Exception:
+        pass
+    return links
+
+
+def _ddg_instant(query: str, max_results: int = 5) -> List[dict]:
+    """DuckDuckGo Instant Answer JSON API (no key). Returns {title,url}."""
+    try:
+        q = urllib.parse.quote_plus(query)
+        url = f"https://api.duckduckgo.com/?q={q}&format=json&no_html=1&no_redirect=1"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json() if resp.status_code == 200 else {}
+        out: List[dict] = []
+        if data.get("AbstractURL"):
+            out.append({"title": data.get("Heading") or data.get("AbstractURL"), "url": data.get("AbstractURL")})
+        for item in data.get("RelatedTopics", []) or []:
+            if isinstance(item, dict):
+                first_url = item.get("FirstURL")
+                text = item.get("Text") or first_url
+                if first_url and first_url.startswith("http"):
+                    out.append({"title": text, "url": first_url})
+            if len(out) >= max_results:
+                break
+        return out[:max_results]
+    except Exception:
+        return []
+
+
+def _wikipedia_search(query: str, max_results: int = 5) -> List[dict]:
+    """Wikipedia search API as a last-resort provider. Returns article URLs."""
+    try:
+        q = urllib.parse.quote_plus(query)
+        url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={q}&format=json&utf8=1&srlimit={max_results}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json() if resp.status_code == 200 else {}
+        results = data.get("query", {}).get("search", [])
+        out: List[dict] = []
+        for r in results:
+            title = r.get("title")
+            if not title:
+                continue
+            page_url = "https://en.wikipedia.org/wiki/" + urllib.parse.quote(title.replace(" ", "_"))
+            out.append({"title": title, "url": page_url})
+        return out[:max_results]
+    except Exception:
+        return []
+
+
+def _google_news_search(query: str, max_results: int = 5) -> List[dict]:
+    """Google News RSS (no key). Returns recent article titles and links."""
+    try:
+        q = urllib.parse.quote_plus(query)
+        url = f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        xml = resp.text or ""
+        items = []
+        for m in re.finditer(r"<item>\s*<title>([\s\S]*?)</title>[\s\S]*?<link>([\s\S]*?)</link>", xml, re.IGNORECASE):
+            title = re.sub(r"<[^>]+>", "", m.group(1))
+            link = re.sub(r"<[^>]+>", "", m.group(2))
+            title = re.sub(r"\s+", " ", title).strip()
+            link = link.strip()
+            if title and link:
+                items.append({"title": title, "url": link})
+            if len(items) >= max_results:
+                break
+        return items
+    except Exception:
+        return []
+
+
+def _fetch_readable(url: str, timeout: int = 15) -> str:
+    """Fetch readable text using r.jina.ai proxy to avoid HTML parsing dependencies."""
+    try:
+        # Ensure scheme
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = "https://" + url
+        proxy_url = "https://r.jina.ai/" + url
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(proxy_url, headers=headers, timeout=timeout)
+        if resp.status_code == 200:
+            return resp.text or ""
+    except Exception:
+        pass
+    # Fallback: basic HTML fetch and crude tag strip
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        if resp.status_code == 200:
+            html = resp.text or ""
+            text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+            text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = re.sub(r"\s+", " ", text)
+            return text.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _answer_from_web(question: str, selected_model: str, gemini_key: str, groq_key: str, gemini_model_name: str, groq_model_name: str) -> dict | None:
+    """Search the web and answer using only web sources. Returns a response dict or None."""
+    results = _duckduckgo_search(question, max_results=5)
+    if not results:
+        # Prefer news when question appears newsy
+        if any(w in question.lower() for w in ["news", "today", "latest", "happened", "breaking"]):
+            results = _google_news_search(question, max_results=6)
+    if not results:
+        results = _bing_search(question, max_results=5)
+    if not results:
+        results = _ddg_instant(question, max_results=5)
+    if not results:
+        results = _wikipedia_search(question, max_results=5)
+    if not results:
+        return None
+    # Deduplicate by URL and take top few
+    seen = set()
+    unique = []
+    for r in results:
+        u = r.get("url")
+        if u and u not in seen:
+            seen.add(u)
+            unique.append(r)
+        if len(unique) >= 4:
+            break
+    chosen = unique
+    contents: List[str] = []
+    used_urls: List[str] = []
+    for r in chosen:
+        text = _fetch_readable(r.get("url", ""))
+        if text:
+            # Trim to avoid overly long prompts
+            trimmed = text.strip()
+            if len(trimmed) > 4000:
+                trimmed = trimmed[:4000]
+            contents.append(f"Source: {r.get('title','')} ({r.get('url','')})\n\n{trimmed}")
+            used_urls.append(r.get("url", ""))
+        if len(contents) >= 3:
+            break
+    if not contents:
+        return None
+    web_context = "\n\n---\n\n".join(contents)
+    prompt = (
+        "You are a helpful assistant. Answer the user's question using ONLY the web content below. "
+        "Cite up to 2 sources by URL in parentheses. Be concise.\n\n"
+        f"Question: {question}\n\n"
+        f"Web content (from recent sources):\n{web_context}\n\n"
+        "Answer:"
+    )
+    text = _call_llm(prompt, selected_model, gemini_key, groq_key, gemini_model_name, groq_model_name)
+    if not text:
+        return None
+    prefix = "From the web (sources: " + ", ".join(used_urls[:3]) + "): "
+    return _add_to_history_and_return(prefix + text, "web", used_urls)
+
+
 @api.post("/chat/ask")
 def ask(payload: dict):
     question = payload.get("question", "").strip()
     if not question:
         return {"answer": "Please enter a question."}
 
-    # Add user question to history
     CHAT_HISTORY.append({"role": "user", "content": question})
 
-    # Get model selection from payload, default to gemini
     selected_model = payload.get("model", "gemini")
+    web_only = bool(payload.get("web_only", False))
     gemini_key = settings.gemini_api_key
     groq_key = settings.groq_api_key
     gemini_model_name = settings.gemini_model or "gemini-2.5-flash"
     groq_model_name = settings.groq_model or "openai/gpt-oss-20b"
 
-    # Summarization path: merge context across docs
+    # If user toggled web-only, bypass document context entirely
+    if web_only:
+        web_resp = _answer_from_web(question, selected_model, gemini_key, groq_key, gemini_model_name, groq_model_name)
+        if web_resp:
+            return web_resp
+        return _add_to_history_and_return("I could not retrieve web results at the moment.", "web", [])
+
     if _is_summarize_query(question):
         merged_context, titles = VECTOR_STORE.build_merged_context(question, top_n_per_doc=3, max_docs=6)
         if merged_context:
@@ -196,13 +421,12 @@ def ask(payload: dict):
                 prefix = "From your documents (sources: " + ", ".join(titles[:3]) + "): " if titles else "From your documents: "
                 return _add_to_history_and_return(prefix + text, "docs", titles)
 
-    # Normal Q&A path
+
     retrieved = VECTOR_STORE.search(question, k=8)
     context_chunks = [c.text for _, c in retrieved]
     context_text = "\n\n".join(context_chunks[:6])
     sources = VECTOR_STORE.top_source_titles(question, k=6)
-    
-    # Debug logging
+
     print(f"Search results: {len(retrieved)} chunks found")
     for i, (score, chunk) in enumerate(retrieved[:3]):
         print(f"  {i+1}. {chunk.doc_type} - {chunk.title}: {chunk.text[:100]}...")
@@ -217,18 +441,18 @@ def ask(payload: dict):
         if text:
             lower = text.lower()
             if any(p in lower for p in ["could not find", "couldn't find", "not found", "do not have enough information"]):
-                general_prompt = (
-                    "Provide a concise, factual answer from general knowledge. Avoid fabrications and include a short explanation.\n\n"
-                    f"Question: {question}"
-                )
-                general_text = _call_llm(general_prompt, selected_model, gemini_key, groq_key, gemini_model_name, groq_model_name)
-                if general_text:
-                    text = text.rstrip() + "\n\n" + general_text
+                # Fall back to web search if documents are insufficient
+                web_resp = _answer_from_web(question, selected_model, gemini_key, groq_key, gemini_model_name, groq_model_name)
+                if web_resp:
+                    return web_resp
             prefix = "From your documents (sources: " + ", ".join(sources[:3]) + "): " if sources else "From your documents: "
             return _add_to_history_and_return(prefix + text, "docs", sources)
 
-    # Fallback to general knowledge
-    prefix = "I could not find an answer to your question in your documents. "
+    # No useful context found at all; try web search as fallback
+    web_resp = _answer_from_web(question, selected_model, gemini_key, groq_key, gemini_model_name, groq_model_name)
+    if web_resp:
+        return web_resp
+    prefix = "I could not find an answer to your question in your documents, and web search failed. "
     prompt = (
         "Provide a concise, factual answer from general knowledge. Avoid fabrications and include a short explanation.\n\n"
         f"Question: {question}"
@@ -237,6 +461,5 @@ def ask(payload: dict):
     if text:
         return _add_to_history_and_return(prefix + text, "general", [])
     
-    # Final fallback
     model_name = "Gemini" if selected_model == "gemini" else ("Groq-openai" if selected_model == "groq-openai" else "Groq-qwen")
     return _add_to_history_and_return(f"I could not find an answer to your question in your documents. ({model_name} error; check API key/model and internet)", "general", [])

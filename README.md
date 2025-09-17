@@ -52,6 +52,13 @@ User Question → Vector Search → Context Retrieval → LLM Generation → Res
 - **Q&A Queries**: Uses focused retrieval for specific questions
 - **Source Attribution**: Always cites which documents were used for answers
 
+### 🔎 Web Search (New)
+- **Web-only toggle in UI**: Turn on “Web search only” to answer strictly from the web (latest) and ignore your documents.
+- **Automatic web fallback**: When document context is insufficient, the backend falls back to web search automatically.
+- **Multiple providers (no API keys required)**: DuckDuckGo (HTML + Instant Answer), Bing HTML, Wikipedia API, Google News RSS.
+- **Readable page fetching**: Pages are fetched via a readability proxy or basic HTML-to-text fallback.
+- **Source badges in chat**: The UI shows clickable hostnames for top sources under each answer.
+
 ### 🤖 Multiple LLM Support
 - **Google Gemini**: Primary LLM with configurable models (gemini-1.5-pro, gemini-2.5-flash)
 - **Groq Integration**: Alternative LLM providers with multiple models:
@@ -62,10 +69,12 @@ User Question → Vector Search → Context Retrieval → LLM Generation → Res
 ### 🎨 Dual User Interfaces
 
 #### 1. FastAPI Web Interface (`/static/index.html`)
-- **Modern Web UI**: Clean, responsive design with real-time chat
-- **File Management**: Visual file selection with type grouping
-- **Real-time Chat**: Instant messaging with markdown rendering
+- **Modern Web UI**: Clean, responsive, dark-themed design with smooth interactions
+- **File Management**: Collapsible type groups, per-group counts, Select‑all, quick links
+- **Real-time Chat**: Markdown rendering, Enter-to-send, typing indicator
 - **Model Selection**: Dropdown to choose between available LLMs
+- **Web Search**: “Web search only” toggle and automatic fallback if docs lack answers
+- **Source Badges**: Clickable hostnames for cited sources
 - **Chat History**: Persistent conversation history
 
 #### 2. Streamlit Application (`streamlit_app.py`)
@@ -247,6 +256,9 @@ streamlit run streamlit_app.py --server.port 8501
 4. **Ingest Knowledge**: Click "Add to Knowledge Base" to process and store documents
 5. **Start Chatting**: Ask questions about your documents or request summaries
 6. **Model Selection**: Choose between Gemini, Groq-OpenAI, or Groq-Qwen models
+7. **Web Search**:
+   - Keep toggle OFF to use your documents first; the app falls back to the web if needed
+   - Turn toggle ON to fetch answers strictly from the web (ignores ingested docs)
 
 ## 🔍 API Endpoints
 
@@ -281,12 +293,14 @@ streamlit run streamlit_app.py --server.port 8501
 - **Chunking Strategy**: 1000-character chunks with 200-character overlap optimize for most use cases
 - **Rate Limiting**: Google APIs have rate limits; consider implementing request throttling
 - **Memory Usage**: Large document collections may require memory optimization
+ - **Web Search**: HTML pages are fetched over HTTPS; network egress must be allowed. For environments behind a proxy, set `HTTP_PROXY`/`HTTPS_PROXY`.
 
 ### Limitations
 - **File Size**: Very large files may cause memory issues during processing
 - **API Quotas**: Google Workspace APIs have daily quotas
 - **Model Costs**: LLM API calls incur costs based on usage
 - **Language Support**: Optimized for English text; other languages may have reduced accuracy
+ - **Web Providers**: If all search providers are blocked by network policy, web answers may fail. Provide a proxy or switch to a key-based provider (e.g., Tavily/SerpAPI) if needed.
 
 ## 🤝 Contributing
 
@@ -323,5 +337,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Clear ChromaDB data if corrupted: delete `chroma_db/` folder
 - Check disk space for vector storage
 - Verify sentence-transformers model downloads correctly
+
+**Web Search Issues**:
+- Ensure outbound HTTPS to public sites is allowed (duckduckgo.com, bing.com, wikipedia.org, news.google.com, r.jina.ai)
+- If behind a corporate proxy, export `HTTP_PROXY` and `HTTPS_PROXY`
+- Try enabling “Web search only” to bypass document context
+- For stricter environments, consider configuring a key-based search API and update the backend to call it
 
 For additional support, please open an issue in the repository.

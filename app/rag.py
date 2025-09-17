@@ -18,6 +18,7 @@ class VectorStore:
         self.collection_name = collection_name
         self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
         try:
+            
             self.collection = self.client.get_collection(name=self.collection_name, embedding_function=self.embedding_function)
         except Exception:
             self.collection = self.client.create_collection(name=self.collection_name, embedding_function=self.embedding_function)

@@ -5,26 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RAG Chatbot with Google Workspace</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial; margin: 24px; }
-    .row { display: flex; gap: 16px; }
-    .col { flex: 1; min-width: 280px; }
-    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
+    :root { --bg:#0b1020; --panel:#12172a; --muted:#8ea0b5; --text:#e9eef7; --accent:#4f8cff; --border:#1e2742; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial; }
+    h2 { margin: 24px; }
+    .container { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 24px 24px; }
+    @media (max-width: 980px) { .container { grid-template-columns: 1fr; } }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
     .section { margin-bottom: 12px; }
-    .group { border: 1px solid #eee; border-radius: 8px; padding: 8px; margin: 8px 0; }
-    .group h4 { margin: 0 0 8px 0; font-size: 14px; }
-    .chat { height: 360px; overflow: auto; border: 1px solid #ddd; padding: 8px; border-radius: 8px; }
-    .msg { margin: 8px 0; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .hint { color: var(--muted); font-size: 12px; }
+    button { cursor: pointer; background: var(--accent); color: #fff; border: 1px solid transparent; padding: 8px 12px; border-radius: 10px; font-weight: 600; }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+
+    .group { border: 1px solid var(--border); border-radius: 10px; margin: 10px 0; overflow: hidden; }
+    .group-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #0e1430; cursor: pointer; }
+    .group-title { margin: 0; font-size: 14px; }
+    .items { padding: 8px 12px; display: grid; gap: 6px; max-height: 220px; overflow: auto; }
+
+    .chat { height: 460px; overflow: auto; border: 1px solid var(--border); padding: 12px; border-radius: 14px; background: #0e1430; }
+    .msg { margin: 10px 0; line-height: 1.45; }
     .msg.you { text-align: right; }
-    .hint { color: #666; font-size: 12px; }
-    button { cursor: pointer; }
-    .msg pre { background: #f6f8fa; padding: 8px; border-radius: 6px; overflow: auto; }
-    .msg code { background: #f6f8fa; padding: 2px 4px; border-radius: 4px; }
+    .bubble { display: inline-block; padding: 10px 12px; border-radius: 12px; max-width: 92%; text-align: left; background:#101a36; border:1px solid var(--border); }
+    .you .bubble { background:#1b223e; }
+    .sources { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+    .badge { font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); color:var(--muted); background:#0b142e; text-decoration:none; }
+    .input { display:flex; gap:8px; }
+    .input input { flex:1; background:#0e1430; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
+    .loading { display:inline-block; width:46px; height:12px; background: linear-gradient(90deg, #2a3a70 25%, #4f8cff 50%, #2a3a70 75%); background-size:200% 100%; animation: shimmer 1.2s linear infinite; border-radius: 6px; }
+    @keyframes shimmer { from{ background-position:200% 0 } to{ background-position:-200% 0 } }
   </style>
 </head>
 <body>
   <h2>RAG Chatbot (FastAPI UI)</h2>
-  <div class="row">
-    <div class="col">
+  <div class="container">
+    <div>
       <div class="card">
         <h3>1) Sign in</h3>
         <button id="login">Sign in with Google</button>
@@ -32,30 +47,23 @@
       </div>
       <div class="card">
         <h3>2) Select Google Files</h3>
-        <div class="section">
-          <button id="loadFiles">Load My Files</button>
-          <span id="loadInfo" class="hint"></span>
-        </div>
+        <div class="section row"><button id="loadFiles">Load My Files</button><span id="loadInfo" class="hint"></span></div>
         <div id="groups">
-          <div class="group" id="group-docs"><h4>Google Docs</h4><div class="items"></div></div>
-          <div class="group" id="group-sheets"><h4>Google Sheets</h4><div class="items"></div></div>
-          <div class="group" id="group-slides"><h4>Google Slides</h4><div class="items"></div></div>
-          <div class="group" id="group-drive"><h4>Google Drive (PDFs)</h4><div class="items"></div></div>
+          <div class="group" id="group-docs"><div class="group-header"><h4 class="group-title">Google Docs <span class="hint" id="count-docs"></span></h4><label class="hint"><input type="checkbox" id="select-all-docs"/> Select all</label></div><div class="items"></div></div>
+          <div class="group" id="group-sheets"><div class="group-header"><h4 class="group-title">Google Sheets <span class="hint" id="count-sheets"></span></h4><label class="hint"><input type="checkbox" id="select-all-sheets"/> Select all</label></div><div class="items"></div></div>
+          <div class="group" id="group-slides"><div class="group-header"><h4 class="group-title">Google Slides <span class="hint" id="count-slides"></span></h4><label class="hint"><input type="checkbox" id="select-all-slides"/> Select all</label></div><div class="items"></div></div>
+          <div class="group" id="group-drive"><div class="group-header"><h4 class="group-title">Google Drive (PDFs) <span class="hint" id="count-drive"></span></h4><label class="hint"><input type="checkbox" id="select-all-drive"/> Select all</label></div><div class="items"></div></div>
         </div>
         <div class="section">
-          <button id="ingest">Add to Knowledge Base</button>
-          <p id="ingestStatus" class="hint"></p>
-        </div>
-        <div class="section">
-          <button id="resetKB" style="background:#fee; border:1px solid #f99;">Reset KB</button>
-          <span id="resetInfo" class="hint"></span>
+          <div class="row"><button id="ingest">Add to Knowledge Base</button><span id="ingestStatus" class="hint"></span></div>
+          <div class="row"><button id="resetKB" class="danger">Reset KB</button><span id="resetInfo" class="hint"></span></div>
         </div>
       </div>
     </div>
-    <div class="col">
+    <div>
       <div class="card">
         <h3>3) Chat</h3>
-        <div class="section">
+        <div class="section row">
           <label>Model: 
             <select id="modelSelect">
               <option value="gemini">Gemini (Google)</option>
@@ -63,12 +71,13 @@
               <option value="groq-qwen">Groq - qwen/qwen3-32b</option>
             </select>
           </label>
+          <label style="margin-left:12px;">
+            <input type="checkbox" id="webOnlyToggle" /> Web search only
+          </label>
+          <div class="hint">If enabled, answers come from the web (latest) and ignore your documents.</div>
         </div>
         <div id="chat" class="chat"></div>
-        <div class="row">
-          <input id="q" style="flex:1" placeholder="Ask a question... try 'summarize' to summarize all selected" />
-          <button id="ask">Ask</button>
-        </div>
+        <div class="input"><input id="q" placeholder="Ask a question... try 'summarize' to summarize all selected" /><button id="ask">Ask</button></div>
       </div>
     </div>
   </div>
@@ -85,6 +94,12 @@
       slides: document.querySelector('#group-slides .items'),
       drive: document.querySelector('#group-drive .items'),
     };
+    const counts = {
+      docs: document.getElementById('count-docs'),
+      sheets: document.getElementById('count-sheets'),
+      slides: document.getElementById('count-slides'),
+      drive: document.getElementById('count-drive'),
+    };
 
     function renderFiles(files) {
       Object.values(groups).forEach(g => g.innerHTML = '');
@@ -93,6 +108,7 @@
       Object.entries(byType).forEach(([type, arr]) => {
         const holder = groups[type];
         if (!holder) return;
+        if (counts[type]) counts[type].textContent = arr.length ? `(${arr.length})` : '';
         if (!arr.length) { holder.innerHTML = '<span class="hint">No files.</span>'; return; }
         arr.forEach(f => {
           const id = `${type}-${f.id}`;
@@ -103,6 +119,19 @@
         });
       });
     }
+
+    // Collapsible group headers and select-all checkboxes
+    Array.from(document.querySelectorAll('.group')).forEach(group => {
+      const header = group.querySelector('.group-header');
+      const items = group.querySelector('.items');
+      if (header && items) header.addEventListener('click', (e) => { if (e.target.tagName !== 'INPUT') { items.style.display = items.style.display === 'none' ? 'grid' : 'none'; }});
+    });
+    function bindSelectAll(type) {
+      const box = document.getElementById(`select-all-${type}`);
+      if (!box) return;
+      box.addEventListener('change', () => { groups[type].querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = box.checked); });
+    }
+    ['docs','sheets','slides','drive'].forEach(bindSelectAll);
 
     document.getElementById('login').onclick = async () => {
       const data = await api('/auth/login');
@@ -131,17 +160,29 @@
       document.getElementById('resetInfo').textContent = res.status || JSON.stringify(res);
     };
 
-    function addMsg(text, who) {
+    function addMsg(text, who, sources) {
       const el = document.createElement('div');
       el.className = `msg ${who}`;
       if (who === 'bot') {
-        try { el.innerHTML = DOMPurify.sanitize(marked.parse(String(text||''))); }
+        try {
+          const bubble = document.createElement('div');
+          bubble.className = 'bubble';
+          bubble.innerHTML = DOMPurify.sanitize(marked.parse(String(text||'')));
+          el.appendChild(bubble);
+          if (Array.isArray(sources) && sources.length) {
+            const bar = document.createElement('div');
+            bar.className = 'sources';
+            sources.slice(0,5).forEach(u => { try { const a=document.createElement('a'); a.className='badge'; a.href=u; a.target='_blank'; a.rel='noopener'; a.textContent=new URL(u).hostname.replace('www.',''); bar.appendChild(a);} catch(e){} });
+            el.appendChild(bar);
+          }
+        }
         catch(e){ el.textContent = text; }
       } else {
-        el.textContent = text;
+        const bubble = document.createElement('div'); bubble.className = 'bubble'; bubble.textContent = text; el.appendChild(bubble);
       }
       document.getElementById('chat').appendChild(el);
       document.getElementById('chat').scrollTop = 1e9;
+      return el;
     }
 
     // Load chat history on page load
@@ -161,15 +202,29 @@
     // Load history when page loads
     loadChatHistory();
 
-    document.getElementById('ask').onclick = async () => {
+    async function send() {
       const q = document.getElementById('q').value.trim();
       if (!q) return;
       addMsg(q, 'you');
       document.getElementById('q').value = '';
       const model = document.getElementById('modelSelect').value;
-      const res = await api('/chat/ask', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ question: q, model: model }) });
-      addMsg(res.answer || JSON.stringify(res), 'bot');
-    };
+      const webOnly = !!document.getElementById('webOnlyToggle').checked;
+      const askBtn = document.getElementById('ask');
+      askBtn.disabled = true;
+      const typing = addMsg('<span class="loading"></span>', 'bot');
+      try {
+        const res = await api('/chat/ask', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ question: q, model: model, web_only: webOnly }) });
+        typing.remove();
+        addMsg(res.answer || JSON.stringify(res), 'bot', res.sources);
+      } catch (e) {
+        typing.remove();
+        addMsg('Something went wrong. Please try again.', 'bot');
+      } finally {
+        askBtn.disabled = false;
+      }
+    }
+    document.getElementById('ask').onclick = send;
+    document.getElementById('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
   </script>
 </body>
 </html>
