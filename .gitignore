@@ -1,0 +1,22 @@
+.env
+.env.*
+*.env
+
+# Python caches
+__pycache__/
+app/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local DB/artifacts
+chroma_db/
+*.sqlite3
+
+# Virtual envs and editor settings
+.venv/
+venv/
+.envrc
+.DS_Store
+.idea/
+.vscode/
