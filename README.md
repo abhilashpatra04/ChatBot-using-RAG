@@ -52,13 +52,6 @@ User Question → Vector Search → Context Retrieval → LLM Generation → Res
 - **Q&A Queries**: Uses focused retrieval for specific questions
 - **Source Attribution**: Always cites which documents were used for answers
 
-### 🔎 Web Search (New)
-- **Web-only toggle in UI**: Turn on “Web search only” to answer strictly from the web (latest) and ignore your documents.
-- **Automatic web fallback**: When document context is insufficient, the backend falls back to web search automatically.
-- **Multiple providers (no API keys required)**: DuckDuckGo (HTML + Instant Answer), Bing HTML, Wikipedia API, Google News RSS.
-- **Readable page fetching**: Pages are fetched via a readability proxy or basic HTML-to-text fallback.
-- **Source badges in chat**: The UI shows clickable hostnames for top sources under each answer.
-
 ### 🤖 Multiple LLM Support
 - **Google Gemini**: Primary LLM with configurable models (gemini-1.5-pro, gemini-2.5-flash)
 - **Groq Integration**: Alternative LLM providers with multiple models:
@@ -300,7 +293,6 @@ streamlit run streamlit_app.py --server.port 8501
 - **API Quotas**: Google Workspace APIs have daily quotas
 - **Model Costs**: LLM API calls incur costs based on usage
 - **Language Support**: Optimized for English text; other languages may have reduced accuracy
- - **Web Providers**: If all search providers are blocked by network policy, web answers may fail. Provide a proxy or switch to a key-based provider (e.g., Tavily/SerpAPI) if needed.
 
 ## 🤝 Contributing
 
@@ -337,11 +329,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Clear ChromaDB data if corrupted: delete `chroma_db/` folder
 - Check disk space for vector storage
 - Verify sentence-transformers model downloads correctly
-
-**Web Search Issues**:
-- Ensure outbound HTTPS to public sites is allowed (duckduckgo.com, bing.com, wikipedia.org, news.google.com, r.jina.ai)
-- If behind a corporate proxy, export `HTTP_PROXY` and `HTTPS_PROXY`
-- Try enabling “Web search only” to bypass document context
-- For stricter environments, consider configuring a key-based search API and update the backend to call it
 
 For additional support, please open an issue in the repository.
